@@ -1,0 +1,286 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+from google.cloud import bigquery
+import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Set up Google BigQuery credentials
+key_path_WINDOWS = r"C:\Users\yvelebayi\bia712-assignment-1acc241cc252.json"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path_WINDOWS
+
+# Initialize BigQuery client
+client = bigquery.Client()
+
+# Function to run query and return DataFrame
+@st.cache_data(ttl=600)
+def run_query(query):
+    query_job = client.query(query)
+    results = query_job.result()
+    return results.to_dataframe()
+
+# Query dataset
+query = """
+SELECT
+  *
+FROM
+  `bia712-assignment.StrokePrediction.StrokePredictionTable`
+"""
+df = run_query(query)
+
+# Clean the BMI column by converting non-numeric values to NaN
+df['bmi'] = pd.to_numeric(df['bmi'], errors='coerce')
+df = df.dropna(subset=['bmi'])
+
+# Sidebar navigation
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to", ["Home", "Dataset Overview", "Gender Analysis", "Age Analysis", "Health Factors Analysis", "Lifestyle Factors Analysis", "Correlation Analysis"])
+
+# Sidebar filters for user interaction
+st.sidebar.header("Filter Options")
+
+# Dropdown for gender selection
+gender_filter = st.sidebar.selectbox("Select Gender", options=["All", "Male", "Female"])
+if gender_filter != "All":
+    df = df[df["gender"] == gender_filter]
+
+# Slider for age range selection
+age_range = st.sidebar.slider("Select Age Range", min_value=int(df["age"].min()), 
+                              max_value=int(df["age"].max()), value=(0, 82))
+df = df[(df["age"] >= age_range[0]) & (df["age"] <= age_range[1])]
+
+# Slider for BMI range selection
+bmi_range = st.sidebar.slider("Select BMI Range",
+                              min_value=float(df['bmi'].min()),
+                              max_value=float(df['bmi'].max()),
+                              value=(10.30, 97.60))
+df = df[(df['bmi'] >= bmi_range[0]) & (df['bmi'] <= bmi_range[1])]
+
+# Text input for filtering by work type
+work_type_filter = st.sidebar.text_input("Enter Work Type (e.g., Private, Govt_job)", "")
+if work_type_filter:
+    df = df[df["work_type"].str.contains(work_type_filter, case=False)]
+
+# Radio button for stroke outcome selection
+stroke_filter = st.sidebar.radio("Select Stroke Outcome", options=["All", "Stroke", "No Stroke"])
+if stroke_filter == "Stroke":
+    df = df[df["stroke"] == 1]
+elif stroke_filter == "No Stroke":
+    df = df[df["stroke"] == 0]
+
+# Home Page
+if page == "Home":
+    st.title("Welcome to the Stroke Prediction App")
+
+    st.markdown("""
+    This app uses data analytics to help healthcare professionals and data analysts to be able to predict the probability of stroke occurrences depending on several factors such as age, gender, health and lifestyle.
+
+    ### Purpose:
+    Understanding the risk factors and early indicators of stroke can **significantly improve prevention efforts** and **targeted healthcare interventions**. This app provides an interactive platform to explore data, apply filters, and visualize relationships between critical variables such as age, body mass index (BMI), and lifestyle choices.
+
+    ---
+
+    ### Key Features:
+
+    - **Custom Data Exploration**: Easily filter the dataset by age, gender, BMI, and more to uncover patterns and correlations.
+  
+    - **Comprehensive Analysis Tools**: Analyze relationships between health factors like glucose levels, hypertension, and stroke occurrences.
+
+    - **Interactive Visualizations**: Dive deep into the data using dynamic charts and graphs to gain insights into stroke risk prediction.
+
+    ---
+
+    Whether you're a **healthcare researcher**, **medical professional**, or **data enthusiast**, this app will help you gain a deeper understanding of stroke risk factors and prediction patterns through data-driven exploration.
+    """)
+
+# Dataset Overview
+elif page == "Dataset Overview":
+    st.title("Dataset Overview")
+
+    # Using columns for a better layout
+    col1, col2, col3 = st.columns(3)
+
+    # Display key stats
+    with col1:
+        st.metric("Total Records", len(df))
+    with col2:
+        st.metric("Average Age", f"{df['age'].mean():.2f}")
+    with col3:
+        st.metric("Median Age", f"{df['age'].median():.2f}")
+
+    # Group data by stroke occurrences
+    stroke_distribution = df['stroke'].value_counts().reset_index()
+    stroke_distribution.columns = ['Stroke Occurrence', 'Count']
+
+    # Map stroke occurrence values for better readability (0 = No Stroke, 1 = Stroke)
+    stroke_distribution['Stroke Occurrence'] = stroke_distribution['Stroke Occurrence'].map({0: 'No Stroke', 1: 'Stroke'})
+
+    # Display the stroke occurrences in a chart
+    fig_stroke_bar = px.bar(stroke_distribution, x='Stroke Occurrence', y='Count', 
+                        title="Stroke Occurrences vs Non-Stroke Occurrences", 
+                        labels={'Stroke Occurrence': 'Stroke', 'Count': 'Number of Patients'})
+    st.plotly_chart(fig_stroke_bar)
+    
+
+# Page 2: Gender Analysis
+elif page == "Gender Analysis":
+    st.title("Gender Analysis")
+    
+    # Pie Chart: Gender Distribution
+    fig_pie = px.pie(df, names='gender', title='Gender Distribution', hole=0.4)
+    st.plotly_chart(fig_pie)
+    
+    # Bar chart for stroke occurrence by gender
+    stroke_gender_counts = df.groupby(['gender', 'stroke']).size().reset_index(name='count')
+    fig_bar_stroke = px.bar(stroke_gender_counts, x='gender', y='count', color='stroke',
+                            barmode='group',
+                            labels={'stroke': 'Stroke Occurrence', 'count': 'Number of Patients'},
+                            title="Number of Patients by Gender and Stroke Occurrence")
+    st.plotly_chart(fig_bar_stroke)
+
+# Page 3: Age Analysis
+elif page == "Age Analysis":
+    st.title("Age Analysis")
+    
+   # Box plot to show Age Distribution by Stroke Occurrence
+    fig_box = px.box(df, x="stroke", y="age", color="stroke", 
+                     title="Age Distribution by Stroke Occurrence",
+                     labels={"stroke": "Stroke (0 = No, 1 = Yes)", "age": "Age"})
+    st.plotly_chart(fig_box)
+   
+   # Histogram of Age distribution with Stroke Occurrence overlay
+    fig_age_distribution = px.histogram(df, x="age", color="stroke", 
+                                    nbins=30, barmode="overlay", 
+                                    title="Age Distribution and Stroke Occurrence",
+                                    labels={"age": "Age", "stroke": "Stroke (0 = No, 1 = Yes)"},
+                                    color_discrete_map={0: 'lightblue', 1: 'red'})  # Custom color mapping
+
+    # Display the histogram in Streamlit
+    st.plotly_chart(fig_age_distribution)
+
+    # Grouping the ages into bins and showing stroke occurrences by age group
+    df['age_group'] = pd.cut(df['age'], bins=[0, 20, 40, 60, 80, 100], 
+                             labels=["0-20", "21-40", "41-60", "61-80", "81-100"])
+
+    fig_bar_age_bins = px.bar(df.groupby(['age_group', 'stroke']).size().reset_index(name='count'),
+                              x='age_group', y='count', color='stroke',
+                              title="Stroke Occurrence by Age Groups",
+                              labels={"age_group": "Age Group", "stroke": "Stroke (0 = No, 1 = Yes)", "count": "Count"})
+    st.plotly_chart(fig_bar_age_bins)
+
+
+    # Page 4: Health Factors Analysis
+elif page == "Health Factors Analysis":
+    st.title("Health Factors Analysis")
+    
+    # Hypertension vs Stroke Occurrence
+    hypertension_stroke_counts = df.groupby(['hypertension', 'stroke']).size().reset_index(name='count')
+    hypertension_stroke_counts['stroke_label'] = hypertension_stroke_counts['stroke'].map({0: 'No Stroke', 1: 'Stroke'})
+
+    # Pie chart for individuals with Hypertension
+    st.subheader("Hypertension vs Stroke Occurrence")
+    fig_pie_hypertension = px.pie(hypertension_stroke_counts[hypertension_stroke_counts['hypertension'] == 1], 
+                                  names='stroke_label', values='count', 
+                                  title="Stroke Occurrence for Individuals with Hypertension")
+    st.plotly_chart(fig_pie_hypertension)
+    
+    # Pie chart for individuals without Hypertension
+    fig_pie_no_hypertension = px.pie(hypertension_stroke_counts[hypertension_stroke_counts['hypertension'] == 0], 
+                                     names='stroke_label', values='count', 
+                                     title="Stroke Occurrence for Individuals without Hypertension")
+    st.plotly_chart(fig_pie_no_hypertension)
+    
+    # Box Plot: Hypertension vs Stroke Occurrence
+    fig_box_hypertension = px.box(df, x="hypertension", y="age", color="stroke",
+                                  title="Age Distribution by Hypertension and Stroke Occurrence",
+                                  labels={"hypertension": "Hypertension (0 = No, 1 = Yes)", "age": "Age"})
+    st.plotly_chart(fig_box_hypertension)
+
+    # Heart Disease vs Stroke Occurrence
+    heart_disease_stroke_counts = df.groupby(['heart_disease', 'stroke']).size().reset_index(name='count')
+    heart_disease_stroke_counts['stroke_label'] = heart_disease_stroke_counts['stroke'].map({0: 'No Stroke', 1: 'Stroke'})
+
+    st.subheader("Heart Disease vs Stroke Occurrence")
+    fig_pie_heart_disease = px.pie(heart_disease_stroke_counts[heart_disease_stroke_counts['heart_disease'] == 1], 
+                                   names='stroke_label', values='count', 
+                                   title="Stroke Occurrence for Individuals with Heart Disease")
+    st.plotly_chart(fig_pie_heart_disease)
+
+    fig_box_heart_disease = px.box(df, x="heart_disease", y="age", color="stroke",
+                                   title="Age Distribution by Heart Disease and Stroke Occurrence")
+    st.plotly_chart(fig_box_heart_disease)
+
+# Page 5: Lifestyle Factors Analysis
+elif page == "Lifestyle Factors Analysis":
+    st.title("Lifestyle Factors Analysis")
+    
+    # BMI Distribution by Stroke Occurrence
+    fig_box_bmi = px.box(df, x="stroke", y="bmi", color="stroke",
+                         title="BMI Distribution by Stroke Occurrence",
+                         labels={"stroke": "Stroke (0 = No, 1 = Yes)", "bmi": "BMI"})
+    st.plotly_chart(fig_box_bmi)
+    
+    # Glucose Level Distribution by Stroke Occurrence
+    fig_box_glucose = px.box(df, x="stroke", y="avg_glucose_level", color="stroke",
+                             title="Glucose Level Distribution by Stroke Occurrence",
+                             labels={"stroke": "Stroke (0 = No, 1 = Yes)", "avg_glucose_level": "Average Glucose Level"})
+    st.plotly_chart(fig_box_glucose)
+
+    # Smoking Status vs Stroke Occurrence
+    fig_bar_smoking_status = px.bar(df.groupby(['smoking_status', 'stroke']).size().reset_index(name='count'),
+                                    x='smoking_status', y='count', color='stroke',
+                                    title="Stroke Occurrence by Smoking Status",
+                                    labels={"smoking_status": "Smoking Status"})
+    st.plotly_chart(fig_bar_smoking_status)
+    
+    # Work Type vs Stroke Occurrence
+    fig_bar_worktype_stroke = px.bar(df.groupby(['work_type', 'stroke']).size().reset_index(name='count'),
+                                     x='work_type', y='count', color='stroke',
+                                     title="Stroke Occurrence by Work Type")
+    st.plotly_chart(fig_bar_worktype_stroke)
+
+# Correlation Analysis Page
+elif page == "Correlation Analysis":
+    st.title("Correlation Analysis")
+   
+    # Scatter Plot: Age vs. Glucose Level
+    fig = px.scatter(df, x="age", y="avg_glucose_level", color="stroke",
+                 title="Age vs. Average Glucose Level by Stroke")
+    st.plotly_chart(fig)
+
+    # Calculate the correlation coefficients for specific pairs
+    age_glucose_corr = df['age'].corr(df['avg_glucose_level'])
+    age_stroke_corr = df['age'].corr(df['stroke'])
+    glucose_stroke_corr = df['avg_glucose_level'].corr(df['stroke'])
+
+    st.write(f"Correlation between Age and Glucose Level: {age_glucose_corr:.4f}")
+    st.write(f"Correlation between Age and Stroke: {age_stroke_corr:.4f}")
+    st.write(f"Correlation between Glucose Level and Stroke: {glucose_stroke_corr:.4f}")
+
+    # BMI vs Glucose Level by Stroke
+    fig = px.scatter(df, x="bmi", y="avg_glucose_level", color="stroke",
+                 title="BMI vs. Glucose Level by Stroke")
+    st.plotly_chart(fig)
+    
+    # Calculate the correlation coefficients for BMI
+    bmi_glucose_corr = df['bmi'].corr(df['avg_glucose_level'])
+    bmi_stroke_corr = df['bmi'].corr(df['stroke'])
+
+    st.write(f"Correlation between BMI and Glucose Level: {bmi_glucose_corr:.4f}")
+    st.write(f"Correlation between BMI and Stroke: {bmi_stroke_corr:.4f}")
+    
+    # Correlation Matrix Heatmap
+    numeric_columns = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
+    corr_matrix = df[numeric_columns].corr().round(4)
+
+    fig_corr = px.imshow(corr_matrix, 
+                         labels={'color': 'Correlation Coefficient'}, 
+                         x=numeric_columns, 
+                         y=numeric_columns,
+                         title="Correlation Matrix Heatmap",
+                         text_auto=True)
+
+    fig_corr.update_layout(width=800, height=800)
+    st.plotly_chart(fig_corr)
+
